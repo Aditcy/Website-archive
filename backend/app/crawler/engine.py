@@ -223,7 +223,6 @@ def run(did, rid):
         c.done = db.scalar(
             select(func.count(URL.id)).where(
                 URL.domain_id == did,
-                URL.domain_id == did,
                 URL.checked_at.is_not(None),
             )
         ) or 0

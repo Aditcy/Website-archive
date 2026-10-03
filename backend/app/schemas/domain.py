@@ -1,10 +1,10 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict
 
 
 class DomIn(BaseModel):
-    url: str
+    url: AnyHttpUrl
 
 
 class DomOut(BaseModel):
