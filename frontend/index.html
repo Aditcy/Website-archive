@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Website Archive Repository</title>
+<style>
+body{font-family:system-ui;background:#0f172a;color:#e2e8f0;margin:0}main{max-width:1200px;margin:auto;padding:24px}h1{margin-top:0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}.card{background:#1e293b;padding:16px;border-radius:12px}.num{font-size:28px;font-weight:700}input,select,button{padding:10px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:#e2e8f0}button{cursor:pointer;background:#2563eb;border:0}.row{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}table{width:100%;border-collapse:collapse;background:#1e293b}th,td{padding:10px;border-bottom:1px solid #334155;text-align:left}a{color:#60a5fa}
+</style>
+</head>
+<body><main>
+<h1>Website Archive Repository</h1>
+<div class="grid" id="stats"></div>
+<div class="row"><input id="site" placeholder="https://example.com"><button onclick="add()">Add Domain</button></div>
+<div id="domains"></div>
+<h2>URL Repository</h2>
+<div class="row"><input id="q" placeholder="Search URL" oninput="loadUrls()"></div>
+<table><thead><tr><th>URL</th><th>Source</th><th>HTTP</th><th>Crawled</th></tr></thead><tbody id="urls"></tbody></table>
+<script>
+const j=async(u,o)=>fetch(u,o).then(r=>r.json());
+async function load(){let s=await j('/api/dashboard');document.querySelector('#stats').innerHTML=Object.entries(s).map(([k,v])=>`<div class="card"><div>${k}</div><div class="num">${v}</div></div>`).join('');let d=await j('/api/domains');document.querySelector('#domains').innerHTML=d.map(x=>`<div class="card" style="margin:10px 0"><b>${x.name}</b><div>${x.base_url}</div><div class="row"><button onclick="scan(${x.id})">Scan</button><button onclick="queue(${x.id},'wayback')">Archive Wayback</button><button onclick="queue(${x.id},'archive_today')">Archive.today</button></div></div>`).join('');loadUrls()}
+async function add(){let v=document.querySelector('#site').value;if(!v)return;await j('/api/domains',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:v})});document.querySelector('#site').value='';load()}
+async function scan(id){await j('/api/domains/'+id+'/scan',{method:'POST'});load()}
+async function queue(id,s){await j('/api/submissions/queue/'+id+'?service='+s,{method:'POST'});load()}
+async function loadUrls(){let q=encodeURIComponent(document.querySelector('#q').value);let a=await j('/api/urls?q='+q);document.querySelector('#urls').innerHTML=a.map(x=>`<tr><td>${x.url}</td><td>${x.source}</td><td>${x.http??''}</td><td>${x.crawled??''}</td></tr>`).join('')}
+load();setInterval(load,5000)
+</script></main></body></html>

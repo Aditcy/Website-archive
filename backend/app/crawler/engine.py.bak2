@@ -1,0 +1,234 @@
+import time
+import httpx
+from datetime import datetime
+from urllib.parse import urljoin
+from sqlalchemy import select, func
+
+from ..config import cfg
+from ..models import Domain, Url, Crawl
+from .normalize import norm, host
+from .html import links
+from .sitemap import get as smget, urls as smurls
+from .robots import maps
+
+
+def add(db, did, raw, src, srcu=None):
+    u = norm(raw)
+    if not u:
+        return None
+
+    d = db.get(Domain, did)
+    if not d:
+        return None
+
+    base_host = host(d.base_url)
+    url_host = host(u)
+
+    if url_host != base_host and not url_host.endswith("." + base_host):
+        return None
+
+    q = db.execute(
+        select(Url).where(
+            Url.domain_id == did,
+            Url.norm == u,
+        )
+    ).scalar_one_or_none()
+
+    if q:
+        return q, False
+
+    q = Url(
+        domain_id=did,
+        url=raw,
+        norm=u,
+        source=src,
+    )
+
+    db.add(q)
+    db.flush()
+
+    return q, True
+
+
+def seed(db, did):
+    d = db.get(Domain, did)
+    if not d:
+        return
+
+    add(db, did, d.base_url, "root")
+
+    rurl = urljoin(d.base_url, "/robots.txt")
+
+    try:
+        r = httpx.get(
+            rurl,
+            headers={"User-Agent": cfg.ua},
+            timeout=20,
+        )
+
+        for s in maps(r.text):
+            try:
+                for u in smurls(
+                    smget(
+                        s,
+                        {"User-Agent": cfg.ua},
+                    )
+                ):
+                    add(db, did, u, "sitemap")
+            except Exception:
+                pass
+
+    except Exception:
+        pass
+
+    db.commit()
+
+
+def run(did, rid):
+    from ..db import Ses
+
+    db = Ses()
+
+    try:
+        d = db.get(Domain, did)
+        c = db.get(Crawl, rid)
+
+        if not d or not c:
+            return
+
+        c.status = "running"
+        c.started_at = datetime.utcnow()
+        db.commit()
+
+        seed(db, did)
+
+        while True:
+            rows = (
+                db.execute(
+                    select(Url)
+                    .where(
+                        Url.domain_id == did,
+                        Url.crawled_at.is_(None),
+                    )
+                    .limit(cfg.batch)
+                )
+                .scalars()
+                .all()
+            )
+
+            if not rows:
+                break
+
+            for u in rows:
+                try:
+                    h = {
+                        "User-Agent": cfg.ua,
+                    }
+
+                    r = httpx.get(
+                        u.norm,
+                        headers=h,
+                        timeout=20,
+                        follow_redirects=True,
+                    )
+
+                    u.http_status = r.status_code
+                    u.content_type = r.headers.get(
+                        "content-type",
+                        "",
+                    )[:120]
+
+                    if str(r.url) != u.norm:
+                        u.redirect = str(r.url)
+
+                    u.crawled_at = datetime.utcnow()
+                    u.checked_at = datetime.utcnow()
+                    u.status = (
+                        "ok"
+                        if r.status_code < 400
+                        else "error"
+                    )
+
+                    if "text/html" in u.content_type:
+                        for x in links(r.text, r.url):
+                            add(
+                                db,
+                                did,
+                                x,
+                                "html",
+                            )
+
+                    c.total = (
+                        db.scalar(
+                            select(func.count(Url.id)).where(
+                                Url.domain_id == did
+                            )
+                        )
+                        or 0
+                    )
+
+                    c.done = (
+                        db.scalar(
+                            select(func.count(Url.id)).where(
+                                Url.domain_id == did,
+                                Url.crawled_at.is_not(None),
+                            )
+                        )
+                        or 0
+                    )
+
+                    db.commit()
+
+                    time.sleep(cfg.delay)
+
+                except Exception as e:
+                    u.status = "error"
+                    u.crawled_at = datetime.utcnow()
+                    u.checked_at = datetime.utcnow()
+
+                    c.failed = (c.failed or 0) + 1
+                    c.error = str(e)[:1000]
+
+                    db.commit()
+
+        c.total = (
+            db.scalar(
+                select(func.count(Url.id)).where(
+                    Url.domain_id == did
+                )
+            )
+            or 0
+        )
+
+        c.done = (
+            db.scalar(
+                select(func.count(Url.id)).where(
+                    Url.domain_id == did,
+                    Url.crawled_at.is_not(None),
+                )
+            )
+            or 0
+        )
+
+        c.status = "done"
+        c.finished_at = datetime.utcnow()
+
+        d.last_scan = datetime.utcnow()
+
+        db.commit()
+
+    except Exception as e:
+        try:
+            c = db.get(Crawl, rid)
+            if c:
+                c.status = "failed"
+                c.error = str(e)[:1000]
+                c.finished_at = datetime.utcnow()
+                db.commit()
+        except Exception:
+            pass
+
+        raise
+
+    finally:
+        db.close()

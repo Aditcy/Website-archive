@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg
+pydantic
+httpx
+beautifulsoup4
+celery
+redis
+python-multipart

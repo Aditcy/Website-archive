@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: archive
+      POSTGRES_USER: archive
+      POSTGRES_PASSWORD: archive
+    ports: ["5432:5432"]
+    volumes: [pg:/var/lib/postgresql/data]
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://archive:archive@db:5432/archive
+      REDIS_URL: redis://redis:6379/0
+      IA_KEY: ${IA_KEY:-}
+      IA_SECRET: ${IA_SECRET:-}
+    ports: ["8000:8000"]
+    depends_on: [db,redis]
+  worker:
+    build: ./backend
+    command: celery -A app.workers.celery.cel worker --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+psycopg://archive:archive@db:5432/archive
+      REDIS_URL: redis://redis:6379/0
+      IA_KEY: ${IA_KEY:-}
+      IA_SECRET: ${IA_SECRET:-}
+    depends_on: [db,redis]
+volumes:
+  pg:

@@ -1,0 +1,6 @@
+setup.py
+ruff/__init__.py
+ruff.egg-info/PKG-INFO
+ruff.egg-info/SOURCES.txt
+ruff.egg-info/dependency_links.txt
+ruff.egg-info/top_level.txt
