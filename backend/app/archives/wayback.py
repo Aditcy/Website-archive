@@ -9,114 +9,190 @@ from .base import Arch, Res
 class Way(Arch):
     name = "wayback"
 
+    save_url = "https://web.archive.org/save"
+    save_get_url = "https://web.archive.org/save/"
+
     def submit(self, url):
-        h = {
+        headers = {
             "Accept": "application/json",
             "User-Agent": cfg.user_agent,
         }
 
         if not cfg.ia_key or not cfg.ia_secret:
-            try:
-                r = httpx.get(
-                    "https://web.archive.org/save/"
-                    + quote(url, safe=":/?=&%"),
-                    headers=h,
-                    timeout=60,
-                    follow_redirects=False,
-                )
+            return self._submit_public(url, headers)
 
-                if r.status_code == 401:
-                    return Res(
-                        False,
-                        err="auth_required: Wayback requires IA_KEY/IA_SECRET",
-                    )
+        return self._submit_authenticated(url, headers)
 
-                loc = (
-                    r.headers.get("location")
-                    or r.headers.get("content-location")
-                )
+    def _submit_public(self, url, headers):
+        try:
+            response = httpx.get(
+                self.save_get_url + quote(url, safe=":/?=&%"),
+                headers=headers,
+                timeout=cfg.timeout,
+                follow_redirects=False,
+            )
 
-                if loc:
-                    return Res(True, loc)
-
-                if r.status_code >= 400:
-                    return Res(
-                        False,
-                        err=f"HTTP {r.status_code}: {r.text[:500]}",
-                    )
-
+            if response.status_code == 401:
                 return Res(
                     False,
-                    err="No archive location returned",
+                    err="auth_required: Wayback requires IA_KEY/IA_SECRET",
                 )
 
-            except Exception as e:
-                return Res(False, err=str(e)[:1000])
+            location = (
+                response.headers.get("location")
+                or response.headers.get("content-location")
+            )
 
-        h["Authorization"] = f"LOW {cfg.ia_key}:{cfg.ia_secret}"
+            if location:
+                return Res(True, location)
+
+            if response.status_code >= 400:
+                return Res(
+                    False,
+                    err=f"HTTP {response.status_code}: "
+                        f"{response.text[:500]}",
+                )
+
+            return Res(
+                False,
+                err="No archive location returned",
+            )
+
+        except httpx.TimeoutException:
+            return Res(False, err="timeout: Wayback request timed out")
+
+        except httpx.RequestError as exc:
+            return Res(
+                False,
+                err=f"connection_error: {str(exc)[:900]}",
+            )
+
+        except Exception as exc:
+            return Res(False, err=str(exc)[:1000])
+
+    def _submit_authenticated(self, url, headers):
+        headers = dict(headers)
+        headers["Authorization"] = (
+            f"LOW {cfg.ia_key}:{cfg.ia_secret}"
+        )
 
         try:
-            r = httpx.post(
-                "https://web.archive.org/save",
-                headers=h,
+            response = httpx.post(
+                self.save_url,
+                headers=headers,
                 data={
                     "url": url,
                     "skip_first_archive": "1",
                 },
-                timeout=60,
+                timeout=cfg.timeout,
             )
 
-            if r.status_code == 401:
+            if response.status_code == 401:
                 return Res(
                     False,
                     err="auth_required: Wayback credentials rejected",
                 )
 
-            if r.status_code >= 400:
+            if response.status_code >= 400:
                 return Res(
                     False,
-                    err=f"HTTP {r.status_code}: {r.text[:500]}",
+                    err=f"HTTP {response.status_code}: "
+                        f"{response.text[:500]}",
                 )
 
-            j = r.json()
-            aid = j.get("job_id")
+            try:
+                data = response.json()
+            except ValueError:
+              
+                return Res(
+                    False,
+                    err="Invalid JSON returned by Wayback",
+                )
+
+            if data.get("status") == "error":
+              return Res(
+                    False,
+                    err=(
+                        data.get("message")
+                        or data.get("status_ext")
+                        or "capture failed"
+                    ),
+                )
+
+            aid = data.get("job_id")
 
             if not aid:
-                return Res(False, err="No job_id returned")
-
-            for _ in range(24):
-                s = httpx.get(
-                    f"https://web.archive.org/save/status/{aid}",
-                    headers=h,
-                    timeout=30,
+                return Res(
+                    False,
+                    err="No job_id returned",
                 )
 
-                if s.status_code == 401:
+            for _ in range(24):
+                status = httpx.get(
+                    f"https://web.archive.org/save/status/{aid}",
+                    headers=headers,
+                    timeout=cfg.timeout,
+                )
+
+                if status.status_code == 401:
                     return Res(
                         False,
                         aid=aid,
-                        err="auth_required: Wayback credentials rejected",
+                        err="auth_required: "
+                            "Wayback credentials rejected",
                     )
 
-                z = s.json()
+                if status.status_code >= 400:
+                    return Res(
+                        False,
+                        aid=aid,
+                        err=f"HTTP {status.status_code}: "
+                            f"{status.text[:500]}",
+                    )
 
-                if z.get("status") == "success":
-                    ts = z.get("timestamp")
-                    original = z.get("original_url") or url
+                try:
+                    result = status.json()
+                except ValueError:
+                    return Res(
+                        False,
+                        aid=aid,
+                        err="Invalid JSON returned by Wayback status",
+                    )
+
+                state = result.get("status")
+
+                if state == "success":
+                    timestamp = result.get("timestamp")
+                    original = (
+                        result.get("original_url")
+                        or url
+                    )
+
+                    if not timestamp:
+                        return Res(
+                            False,
+                            aid=aid,
+                            err="Wayback succeeded without timestamp",
+                        )
+
+                    archive_url = (
+                        "https://web.archive.org/web/"
+                        f"{timestamp}/{original}"
+                    )
 
                     return Res(
                         True,
-                        f"https://web.archive.org/web/{ts}/{original}",
+                        archive_url,
                         aid,
                     )
 
-                if z.get("status") == "error":
+                if state == "error":
                     return Res(
                         False,
                         aid=aid,
                         err=(
-                            z.get("message")
-                            or z.get("status_ext")
+                            result.get("message")
+                            or result.get("status_ext")
                             or "capture failed"
                         ),
                     )
@@ -129,14 +205,27 @@ class Way(Arch):
                 err="capture pending after timeout",
             )
 
-        except Exception as e:
-            return Res(False, err=str(e)[:1000])
+        except httpx.TimeoutException:
+            return Res(
+                False,
+                err="timeout: Wayback request timed out",
+            )
+
+        except httpx.RequestError as exc:
+            return Res(
+                False,
+                err=f"connection_error: {str(exc)[:900]}",
+            )
+
+        except Exception as exc:
+            return Res(False, err=str(exc)[:1000])
 
     def status(self, aid):
         try:
-            return httpx.get(
+            response = httpx.get(
                 f"https://web.archive.org/save/status/{aid}",
-                timeout=30,
-            ).json()
+                timeout=cfg.timeout,
+            )
+            return response.json()
         except Exception:
             return {}

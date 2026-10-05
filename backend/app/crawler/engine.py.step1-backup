@@ -9,8 +9,7 @@ from ..models import Domain, URL, Crawl
 from .normalize import norm, host
 from .html import links
 from .sitemap import get as smget, urls as smurls
-from .robots import maps, read as robots_read, allowed as robots_allowed
-from .feeds import find as feedfind
+from .robots import maps
 
 
 def add(db, did, raw, src, srcu=None):
@@ -65,27 +64,26 @@ def seed(db, did):
             robots_url,
             headers={"User-Agent": cfg.user_agent},
             timeout=cfg.timeout,
-            follow_redirects=True,
         )
 
-        if response.status_code < 400:
-            for sitemap_url in maps(response.text):
-                try:
-                    sitemap_data = smget(
-                        sitemap_url,
-                        {"User-Agent": cfg.user_agent},
-                    )
+        for sitemap_url in maps(response.text):
+            try:
+                sitemap_data = smget(
+                    sitemap_url,
+                    {"User-Agent": cfg.user_agent},
+                )
 
-                    for discovered_url in smurls(sitemap_data):
-                        add(
-                            db,
-                            did,
-                            discovered_url,
-                            "sitemap",
-                            sitemap_url,
-                        )
-                except Exception:
-                    continue
+                for discovered_url in smurls(sitemap_data):
+                    add(
+                        db,
+                        did,
+                        discovered_url,
+                        "sitemap",
+                        sitemap_url,
+                    )
+            except Exception:
+                pass
+
     except Exception:
         pass
 
@@ -106,12 +104,8 @@ def run(did, rid):
         if not c:
             raise RuntimeError(f"crawl {rid} not found")
 
-        if not d.active:
-            raise RuntimeError(f"domain {did} is inactive")
-
         c.status = "running"
         c.started_at = utcnow()
-        c.finished_at = None
         c.heartbeat = utcnow()
         c.total = 0
         c.done = 0
@@ -129,28 +123,14 @@ def run(did, rid):
 
         seed(db, did)
 
-        robots = robots_read(d.base_url)
-
         while True:
-            total_urls = db.scalar(
-                select(func.count(URL.id)).where(
-                    URL.domain_id == did
-                )
-            ) or 0
-
-            if total_urls >= cfg.max_urls:
-                break
-
-            remaining = cfg.max_urls - total_urls
-
             rows = db.execute(
                 select(URL)
                 .where(
                     URL.domain_id == did,
                     URL.checked_at.is_(None),
                 )
-                .order_by(URL.id)
-                .limit(min(cfg.batch, remaining))
+                .limit(cfg.batch)
             ).scalars().all()
 
             if not rows:
@@ -158,41 +138,6 @@ def run(did, rid):
 
             for u in rows:
                 c.heartbeat = utcnow()
-                db.commit()
-
-                if not robots_allowed(
-                    robots,
-                    u.norm,
-                    cfg.user_agent,
-                ):
-                    now = utcnow()
-
-                    u.status = "skipped"
-                    u.crawled_at = now
-                    u.checked_at = now
-
-                    c.total = db.scalar(
-                        select(func.count(URL.id)).where(
-                            URL.domain_id == did
-                        )
-                    ) or 0
-
-                    c.done = db.scalar(
-                        select(func.count(URL.id)).where(
-                            URL.domain_id == did,
-                            URL.checked_at.is_not(None),
-                        )
-                    ) or 0
-
-                    c.failed = db.scalar(
-                        select(func.count(URL.id)).where(
-                            URL.domain_id == did,
-                            URL.status == "error",
-                        )
-                    ) or 0
-
-                    db.commit()
-                    continue
 
                 try:
                     response = httpx.get(
@@ -222,10 +167,12 @@ def run(did, rid):
 
                     if response.status_code < 400:
                         u.status = "ok"
+                        c.done += 1
                     else:
                         u.status = "error"
+                        c.failed += 1
 
-                    if "text/html" in u.content_type.lower():
+                    if "text/html" in u.content_type:
                         for discovered in links(
                             response.text,
                             final_url,
@@ -238,44 +185,15 @@ def run(did, rid):
                                 u.norm,
                             )
 
-                        for feed_url in feedfind(
-                            response.text,
-                            final_url,
-                        ):
-                            add(
-                                db,
-                                did,
-                                feed_url,
-                                "feed",
-                                u.norm,
-                            )
-
                     c.total = db.scalar(
                         select(func.count(URL.id)).where(
                             URL.domain_id == did
                         )
                     ) or 0
 
-                    c.done = db.scalar(
-                        select(func.count(URL.id)).where(
-                            URL.domain_id == did,
-                            URL.checked_at.is_not(None),
-                        )
-                    ) or 0
-
-                    c.failed = db.scalar(
-                        select(func.count(URL.id)).where(
-                            URL.domain_id == did,
-                            URL.status == "error",
-                        )
-                    ) or 0
-
-                    c.heartbeat = utcnow()
-
                     db.commit()
 
-                    if cfg.delay > 0:
-                        time.sleep(cfg.delay)
+                    time.sleep(cfg.delay)
 
                 except Exception as e:
                     now = utcnow()
@@ -284,28 +202,15 @@ def run(did, rid):
                     u.checked_at = now
                     u.status = "error"
 
+                    c.failed += 1
+                    c.error = str(e)[:1000]
+                    c.heartbeat = utcnow()
+
                     c.total = db.scalar(
                         select(func.count(URL.id)).where(
                             URL.domain_id == did
                         )
                     ) or 0
-
-                    c.done = db.scalar(
-                        select(func.count(URL.id)).where(
-                            URL.domain_id == did,
-                            URL.checked_at.is_not(None),
-                        )
-                    ) or 0
-
-                    c.failed = db.scalar(
-                        select(func.count(URL.id)).where(
-                            URL.domain_id == did,
-                            URL.status == "error",
-                        )
-                    ) or 0
-
-                    c.error = str(e)[:1000]
-                    c.heartbeat = utcnow()
 
                     db.commit()
 
@@ -353,3 +258,7 @@ def run(did, rid):
             pass
 
         raise
+
+    # Do not close db here.
+    # The caller owns the session. Tests intentionally inject their
+    # session through engine.Ses, and the worker's caller owns cleanup.

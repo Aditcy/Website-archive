@@ -285,3 +285,139 @@ def test_run_updates_crawl_counters(db):
     assert crawl.total == 2
     assert crawl.done == 2
     assert crawl.failed == 0
+
+
+def test_run_respects_robots(monkeypatch, db):
+    from backend.app.crawler import engine
+    from backend.app.models import Domain, URL, Crawl
+
+    domain = Domain(
+        name="example.com",
+        base_url="https://example.com",
+        active=True,
+    )
+    db.add(domain)
+    db.flush()
+
+    blocked = URL(
+        domain_id=domain.id,
+        url="https://example.com/private",
+        norm="https://example.com/private",
+        source="root",
+    )
+    db.add(blocked)
+
+    crawl = Crawl(
+        domain_id=domain.id,
+        status="queued",
+    )
+    db.add(crawl)
+    db.commit()
+
+    class FakeRobots:
+        def can_fetch(self, user_agent, url):
+            return False
+
+    monkeypatch.setattr(
+        engine,
+        "robots_read",
+        lambda base: FakeRobots(),
+    )
+
+    def should_not_fetch(*args, **kwargs):
+        raise AssertionError("robots-blocked URL was fetched")
+
+    monkeypatch.setattr(
+        engine.httpx,
+        "get",
+        should_not_fetch,
+    )
+
+    monkeypatch.setattr(
+        engine,
+        "seed",
+        lambda db, did: None,
+    )
+
+    monkeypatch.setattr(
+        engine,
+        "Ses",
+        lambda: db,
+    )
+
+    engine.run(domain.id, crawl.id)
+
+    db.refresh(blocked)
+    db.refresh(crawl)
+
+    assert blocked.status == "skipped"
+    assert blocked.checked_at is not None
+    assert crawl.status == "done"
+
+
+def test_run_respects_robots(monkeypatch, db):
+    from backend.app.crawler import engine
+    from backend.app.models import Domain, URL, Crawl
+
+    domain = Domain(
+        name="example.com",
+        base_url="https://example.com",
+        active=True,
+    )
+    db.add(domain)
+    db.flush()
+
+    blocked = URL(
+        domain_id=domain.id,
+        url="https://example.com/private",
+        norm="https://example.com/private",
+        source="root",
+    )
+    db.add(blocked)
+
+    crawl = Crawl(
+        domain_id=domain.id,
+        status="queued",
+    )
+    db.add(crawl)
+    db.commit()
+
+    class FakeRobots:
+        def can_fetch(self, user_agent, url):
+            return False
+
+    monkeypatch.setattr(
+        engine,
+        "robots_read",
+        lambda base: FakeRobots(),
+    )
+
+    def should_not_fetch(*args, **kwargs):
+        raise AssertionError("robots-blocked URL was fetched")
+
+    monkeypatch.setattr(
+        engine.httpx,
+        "get",
+        should_not_fetch,
+    )
+
+    monkeypatch.setattr(
+        engine,
+        "seed",
+        lambda db, did: None,
+    )
+
+    monkeypatch.setattr(
+        engine,
+        "Ses",
+        lambda: db,
+    )
+
+    engine.run(domain.id, crawl.id)
+
+    db.refresh(blocked)
+    db.refresh(crawl)
+
+    assert blocked.status == "skipped"
+    assert blocked.checked_at is not None
+    assert crawl.status == "done"

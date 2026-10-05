@@ -1,4 +1,3 @@
-from datetime import datetime
 from ..time import utcnow
 from celery.exceptions import Retry
 
@@ -58,6 +57,22 @@ def sub(self, sid):
             return
 
         if result.err and result.err.startswith("auth_required:"):
+            x.status = "failed"
+            x.error = result.err
+            db.commit()
+            return
+
+        error_text = str(result.err or "").casefold()
+
+        permanent_errors = (
+            "already been captured",
+            "too-many-daily-captures",
+            "too many daily captures",
+            "daily limit",
+            "captured 5 times today",
+        )
+
+        if any(marker in error_text for marker in permanent_errors):
             x.status = "failed"
             x.error = result.err
             db.commit()

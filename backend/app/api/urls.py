@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..db import get
 from ..models import URL
+from ..schemas.url import UrlOut
+
 
 r = APIRouter(prefix="/api/urls", tags=["urls"])
 
@@ -12,14 +14,21 @@ r = APIRouter(prefix="/api/urls", tags=["urls"])
 def all(
     domain: int | None = None,
     q: str = "",
+    status: str | None = None,
     page: int = 1,
     size: int = 50,
     db: Session = Depends(get),
 ):
+    page = max(page, 1)
+    size = min(max(size, 1), 200)
+
     query = select(URL)
 
-    if domain:
+    if domain is not None:
         query = query.where(URL.domain_id == domain)
+
+    if status:
+        query = query.where(URL.status == status)
 
     if q:
         query = query.where(
@@ -28,9 +37,6 @@ def all(
                 URL.url.ilike(f"%{q}%"),
             )
         )
-
-    page = max(page, 1)
-    size = min(max(size, 1), 200)
 
     rows = (
         db.execute(
@@ -43,20 +49,16 @@ def all(
     )
 
     return [
-        {
-            "id": u.id,
-            "domain_id": u.domain_id,
-            "url": u.url,
-            "norm": u.norm,
-            "status": u.status,
-            "http_status": u.http_status,
-            "content_type": u.content_type,
-            "redirect": u.redirect,
-            "source": u.source,
-            "discovered_at": u.discovered_at,
-            "crawled_at": u.crawled_at,
-            "checked_at": u.checked_at,
-            "queued": u.queued,
-        }
-        for u in rows
+        UrlOut.model_validate(row).model_dump()
+        for row in rows
     ]
+
+
+@r.get("/{uid}", response_model=UrlOut)
+def one(uid: int, db: Session = Depends(get)):
+    row = db.get(URL, uid)
+
+    if not row:
+        raise HTTPException(404, "url not found")
+
+    return row
