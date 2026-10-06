@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import get
@@ -38,6 +38,11 @@ def all(
             )
         )
 
+    total = db.scalar(
+        select(func.count())
+        .select_from(query.subquery())
+    ) or 0
+
     rows = (
         db.execute(
             query.order_by(URL.id.desc())
@@ -48,10 +53,15 @@ def all(
         .all()
     )
 
-    return [
-        UrlOut.model_validate(row).model_dump()
-        for row in rows
-    ]
+    return {
+        "items": [
+            UrlOut.model_validate(row).model_dump()
+            for row in rows
+        ],
+        "page": page,
+        "size": size,
+        "total": total,
+    }
 
 
 @r.get("/{uid}", response_model=UrlOut)

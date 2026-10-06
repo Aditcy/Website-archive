@@ -2,8 +2,10 @@ from .wayback import Way
 from .archive_today import Arc
 
 
-def get(name):
-    return {
+def get(name: str):
+    providers = {
         "wayback": Way(),
         "archive_today": Arc(),
-    }.get(name)
+    }
+
+    return providers.get(name.strip().lower())

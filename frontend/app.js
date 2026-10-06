@@ -682,17 +682,80 @@ $("#urlDomain")?.addEventListener(
 /* CRAWLS */
 
 async function loadCrawls() {
-  /*
-    The existing backend currently exposes individual crawl
-    lookup, not a crawl collection endpoint.
+  try {
+    const result = await api("/api/crawls?page=1&size=50");
 
-    Keep this page honest rather than fabricating history.
-  */
-  $("#crawlHistory").innerHTML = emptyState(
-    "◷",
-    "Crawl history endpoint not exposed yet",
-    "The crawler itself is working. The next backend enhancement is a GET /api/crawls endpoint."
+    const rows = Array.isArray(result)
+      ? result
+      : result.items || [];
+
+    if (!rows.length) {
+      $("#crawlHistory").innerHTML = emptyState(
+        "◷",
+        "No crawl history",
+        "Start a website scan to create your first crawl."
+      );
+      return;
+    }
+
+    $("#crawlHistory").innerHTML = `
+      <div class="panel table-panel">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Website</th>
+                <th>Status</th>
+                <th>Total</th>
+                <th>Done</th>
+                <th>Failed</th>
+                <th>Started</th>
+                <th>Finished</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              ${rows.map((crawl) => `
+                <tr>
+                  <td>#${Number(crawl.id)}</td>
+
+                  <td>
+                    ${escapeHtml(
+                      domainName(crawl.domain_id)
+                    )}
+                  </td>
+
+                  <td>
+                    ${statusBadge(crawl.status)}
+                  </td>
+
+                  <td>${Number(crawl.total || 0).toLocaleString()}</td>
+                  <td>${Number(crawl.done || 0).toLocaleString()}</td>
+                  <td>${Number(crawl.failed || 0).toLocaleString()}</td>
+
+                  <td>${formatDate(crawl.started_at)}</td>
+                  <td>${formatDate(crawl.finished_at)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function domainName(id) {
+  const domain = state.domains.find(
+    (item) => Number(item.id) === Number(id)
   );
+
+  return domain
+    ? domain.name
+    : `Domain #${id}`;
 }
 
 /* SUBMISSIONS */
@@ -712,9 +775,16 @@ async function loadSubmissions() {
       params.set("service", service);
     }
 
-    const rows = await api(
+    params.set("page", "1");
+    params.set("size", "50");
+
+    const result = await api(
       `/api/submissions?${params.toString()}`
     );
+
+    const rows = Array.isArray(result)
+      ? result
+      : result.items || [];
 
     if (!rows.length) {
       $("#submissions").innerHTML = `

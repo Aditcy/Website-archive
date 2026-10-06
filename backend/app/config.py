@@ -2,6 +2,8 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
 class Settings:
     app = os.getenv("APP_NAME", "Website Archive")
 
@@ -23,7 +25,9 @@ class Settings:
     timeout = float(os.getenv("HTTP_TIMEOUT", "20"))
     retries = int(os.getenv("MAX_RETRIES", "3"))
     delay = float(os.getenv("DOMAIN_DELAY", "1"))
-    max_urls = int(os.getenv("MAX_URLS", "1000000"))
+
+    # Maximum number of URLs processed by one crawl.
+    max_urls = int(os.getenv("MAX_URLS", "1000"))
 
     auto_submit = os.getenv("AUTO_SUBMIT", "false").lower() == "true"
     archive_service = os.getenv("ARCHIVE_SERVICE", "wayback")

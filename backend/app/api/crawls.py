@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get
@@ -7,6 +7,21 @@ from ..models import Crawl
 
 
 r = APIRouter(prefix="/api/crawls", tags=["crawls"])
+
+
+def serialize(crawl: Crawl):
+    return {
+        "id": crawl.id,
+        "domain_id": crawl.domain_id,
+        "status": crawl.status,
+        "total": crawl.total,
+        "done": crawl.done,
+        "failed": crawl.failed,
+        "error": crawl.error,
+        "started_at": crawl.started_at,
+        "finished_at": crawl.finished_at,
+        "heartbeat": crawl.heartbeat,
+    }
 
 
 @r.get("")
@@ -28,6 +43,11 @@ def all(
     if status:
         query = query.where(Crawl.status == status)
 
+    total = db.scalar(
+        select(func.count())
+        .select_from(query.subquery())
+    ) or 0
+
     rows = (
         db.execute(
             query.order_by(Crawl.id.desc())
@@ -38,21 +58,12 @@ def all(
         .all()
     )
 
-    return [
-        {
-            "id": c.id,
-            "domain_id": c.domain_id,
-            "status": c.status,
-            "total": c.total,
-            "done": c.done,
-            "failed": c.failed,
-            "error": c.error,
-            "started_at": c.started_at,
-            "finished_at": c.finished_at,
-            "heartbeat": c.heartbeat,
-        }
-        for c in rows
-    ]
+    return {
+        "items": [serialize(crawl) for crawl in rows],
+        "page": page,
+        "size": size,
+        "total": total,
+    }
 
 
 @r.get("/{cid}")
@@ -62,15 +73,4 @@ def one(cid: int, db: Session = Depends(get)):
     if not crawl:
         raise HTTPException(404, "crawl not found")
 
-    return {
-        "id": crawl.id,
-        "domain_id": crawl.domain_id,
-        "status": crawl.status,
-        "total": crawl.total,
-        "done": crawl.done,
-        "failed": crawl.failed,
-        "error": crawl.error,
-        "started_at": crawl.started_at,
-        "finished_at": crawl.finished_at,
-        "heartbeat": crawl.heartbeat,
-    }
+    return serialize(crawl)
